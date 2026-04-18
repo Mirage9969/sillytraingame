@@ -98,10 +98,10 @@ html, body { height: 100%; background: #12121f; color: #e8e8f0; font-family: sys
 <div class="screen active" id="lobby-screen">
   <div class="title">Hoop Trains</div>
   <p class="sub">Race around circular hoops, switch tracks, collect stars.<br>First to 5 points wins!</p>
-  <button class="btn-p1" id="create-btn">Create Game — Player 1</button>
+  <button class="btn-p1" id="create-btn" disabled>Connecting…</button>
   <div class="divider">or join as Player 2</div>
   <input class="code-input" id="code-input" type="text" maxlength="6" placeholder="ROOM CODE" autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false">
-  <button class="btn-p2" id="join-btn">Join Game — Player 2</button>
+  <button class="btn-p2" id="join-btn" disabled>Join Game — Player 2</button>
   <p class="err" id="lobby-err"></p>
 </div>
 
@@ -166,6 +166,24 @@ function show(id) {
   });
 }
 
+// ── Socket connection status ──────────────────────────────────────────────────
+socket.on('connect', () => {
+  document.getElementById('create-btn').disabled = false;
+  document.getElementById('create-btn').textContent = 'Create Game — Player 1';
+  document.getElementById('join-btn').disabled = false;
+  document.getElementById('lobby-err').textContent = '';
+});
+socket.on('disconnect', () => {
+  document.getElementById('create-btn').disabled = true;
+  document.getElementById('join-btn').disabled = true;
+  showErr('Disconnected from server');
+});
+socket.on('connect_error', () => {
+  document.getElementById('create-btn').disabled = true;
+  document.getElementById('join-btn').disabled = true;
+  showErr('Cannot reach server — make sure it is running on port 3000');
+});
+
 // ── Lobby: pre-fill room code from URL ───────────────────────────────────────
 const urlCode = new URLSearchParams(location.search).get('room');
 if (urlCode) document.getElementById('code-input').value = urlCode.toUpperCase();
@@ -178,7 +196,13 @@ function showErr(msg) {
 }
 
 document.getElementById('create-btn').addEventListener('click', () => {
+  if (!socket.connected) { showErr('Not connected to server'); return; }
+  const btn = document.getElementById('create-btn');
+  btn.disabled = true;
+  btn.textContent = 'Creating…';
   socket.emit('create_room', res => {
+    btn.disabled = false;
+    btn.textContent = 'Create Game — Player 1';
     if (res.error) { showErr(res.error); return; }
     myIdx = 0;
     const code = res.roomId;
@@ -190,9 +214,15 @@ document.getElementById('create-btn').addEventListener('click', () => {
 });
 
 document.getElementById('join-btn').addEventListener('click', () => {
+  if (!socket.connected) { showErr('Not connected to server'); return; }
   const code = document.getElementById('code-input').value.trim().toUpperCase();
   if (code.length < 6) { showErr('Enter the 6-character room code'); return; }
+  const btn = document.getElementById('join-btn');
+  btn.disabled = true;
+  btn.textContent = 'Joining…';
   socket.emit('join_room', { roomId: code }, res => {
+    btn.disabled = false;
+    btn.textContent = 'Join Game — Player 2';
     if (res.error) { showErr(res.error); return; }
     myIdx = 1;
     setupGameScreen();
