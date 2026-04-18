@@ -32,9 +32,9 @@
 <div id="game-wrap">
   <canvas id="game-canvas" width="680" height="420"></canvas>
   <div id="overlay">
-    <h2>Hoop Trains</h2>
-    <p>Race around circular tracks and switch hoops to collect stars. First to <strong style="color:#e8e8f0">5 points</strong> wins!<br><br>
-    <strong style="color:#6ec6f5">P1</strong>: A to switch tracks &nbsp;|&nbsp; <strong style="color:#f5a06e">P2</strong>: L to switch tracks</p>
+     <h2>Hoop Trains</h2>
+     <p>Race around circular tracks and switch hoops to collect stars. First to <strong style="color:#e8e8f0">15 points</strong> wins!<br><br>
+     <strong style="color:#6ec6f5">P1</strong>: A to switch tracks &nbsp;|&nbsp; <strong style="color:#f5a06e">P2</strong>: L to switch tracks</p>
     <button class="btn" id="start-btn">Start Game</button>
   </div>
 </div>
@@ -279,11 +279,11 @@ function updateUI() {
 }
 
 function checkWin() {
-  for (let i = 0; i < players.length; i++) {
-    if (players[i].score >= 5) return i;
-  }
-  return -1;
-}
+   for (let i = 0; i < players.length; i++) {
+     if (players[i].score >= 15) return i;
+   }
+   return -1;
+ }
 
 function showWin(idx) {
   gameActive = false;
