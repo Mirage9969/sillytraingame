@@ -26,14 +26,16 @@ html, body { height: 100%; background: #12121f; color: #e8e8f0; font-family: sys
   background: rgba(110,198,245,0.12); border: 1px solid rgba(110,198,245,0.5); color: #6ec6f5;
   -webkit-tap-highlight-color: transparent;
 }
-.btn-p1:active { background: rgba(110,198,245,0.25); }
+.btn-p1:active:not(:disabled) { background: rgba(110,198,245,0.25); }
+.btn-p1:disabled { opacity: 0.4; cursor: default; }
 
 .btn-p2 {
   width: 100%; padding: 17px; border-radius: 14px; font-size: 16px; font-weight: 700; cursor: pointer;
   background: rgba(245,160,110,0.12); border: 1px solid rgba(245,160,110,0.5); color: #f5a06e;
   -webkit-tap-highlight-color: transparent;
 }
-.btn-p2:active { background: rgba(245,160,110,0.25); }
+.btn-p2:active:not(:disabled) { background: rgba(245,160,110,0.25); }
+.btn-p2:disabled { opacity: 0.4; cursor: default; }
 
 .divider {
   display: flex; align-items: center; gap: 10px; width: 100%;
@@ -98,10 +100,10 @@ html, body { height: 100%; background: #12121f; color: #e8e8f0; font-family: sys
 <div class="screen active" id="lobby-screen">
   <div class="title">Hoop Trains</div>
   <p class="sub">Race around circular hoops, switch tracks, collect stars.<br>First to 5 points wins!</p>
-  <button class="btn-p1" id="create-btn" disabled>Connecting…</button>
+  <button class="btn-p1" id="create-btn">Create Game — Player 1</button>
   <div class="divider">or join as Player 2</div>
   <input class="code-input" id="code-input" type="text" maxlength="6" placeholder="ROOM CODE" autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false">
-  <button class="btn-p2" id="join-btn" disabled>Join Game — Player 2</button>
+  <button class="btn-p2" id="join-btn">Join Game — Player 2</button>
   <p class="err" id="lobby-err"></p>
 </div>
 
@@ -134,7 +136,7 @@ html, body { height: 100%; background: #12121f; color: #e8e8f0; font-family: sys
   <button id="sw-btn" disabled>SWITCH</button>
 </div>
 
-<script src="/socket.io/socket.io.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 // ── Constants ────────────────────────────────────────────────────────────────
 const W = 680, H = 420;
@@ -143,22 +145,29 @@ const HOOPS = [
   { x: 340, y: 210, r: 120 },
   { x: 510, y: 210, r: 120 },
 ];
-const P_COLORS = ['#6ec6f5', '#f5a06e'];
-const P_RGB    = ['110,198,245', '245,160,110'];
-const STAR_COL = '#f5e56e';
-const SW_COOL  = 1200;
+const P_COLORS    = ['#6ec6f5', '#f5a06e'];
+const P_RGB       = ['110,198,245', '245,160,110'];
+const STAR_COL    = '#f5e56e';
+const SW_COOL     = 1200;
+const WIN_SCORE   = 5;
+const STAR_RESP   = 1800;
+const TICK_MS     = 33; // ~30 fps physics
 
 // ── App state ────────────────────────────────────────────────────────────────
-const socket = io();
-let myIdx     = null;   // 0 or 1
-let gameState = null;
-let trails    = [[], []];
+let peer       = null;  // PeerJS instance
+let conn       = null;  // DataConnection to the other player
+let myIdx      = null;  // 0 = P1 (host), 1 = P2 (guest)
+let isHost     = false;
+let gameState  = null;
+let trails     = [[], []];
+let gameTimer  = null;
+let cdTimer    = null;
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
 const canvas = document.getElementById('gc');
 const ctx    = canvas.getContext('2d');
 
-// ── Screen switcher ───────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function show(id) {
   ['lobby-screen','wait-screen','game-screen'].forEach(sid => {
     const el = document.getElementById(sid);
@@ -166,116 +175,293 @@ function show(id) {
   });
 }
 
-// ── Socket connection status ──────────────────────────────────────────────────
-socket.on('connect', () => {
-  document.getElementById('create-btn').disabled = false;
-  document.getElementById('create-btn').textContent = 'Create Game — Player 1';
-  document.getElementById('join-btn').disabled = false;
-  document.getElementById('lobby-err').textContent = '';
-});
-socket.on('disconnect', () => {
-  document.getElementById('create-btn').disabled = true;
-  document.getElementById('join-btn').disabled = true;
-  showErr('Disconnected from server');
-});
-socket.on('connect_error', () => {
-  document.getElementById('create-btn').disabled = true;
-  document.getElementById('join-btn').disabled = true;
-  showErr('Cannot reach server — make sure it is running on port 3000');
-});
-
-// ── Lobby: pre-fill room code from URL ───────────────────────────────────────
-const urlCode = new URLSearchParams(location.search).get('room');
-if (urlCode) document.getElementById('code-input').value = urlCode.toUpperCase();
-
-// ── Lobby actions ─────────────────────────────────────────────────────────────
 function showErr(msg) {
   const el = document.getElementById('lobby-err');
   el.textContent = msg;
-  if (msg) setTimeout(() => { if (el.textContent === msg) el.textContent = ''; }, 3000);
+  if (msg) setTimeout(() => { if (el.textContent === msg) el.textContent = ''; }, 4000);
 }
 
+function hPos(hoop, angle) {
+  const h = HOOPS[hoop];
+  return { x: h.x + Math.cos(angle) * h.r, y: h.y + Math.sin(angle) * h.r };
+}
+
+function genCode() {
+  const c = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let s = '';
+  for (let i = 0; i < 6; i++) s += c[Math.floor(Math.random() * c.length)];
+  return s;
+}
+
+// Pre-fill room code from URL
+const urlCode = new URLSearchParams(location.search).get('room');
+if (urlCode) document.getElementById('code-input').value = urlCode.toUpperCase();
+
+// ── Lobby: Create Game (P1) ───────────────────────────────────────────────────
 document.getElementById('create-btn').addEventListener('click', () => {
-  if (!socket.connected) { showErr('Not connected to server'); return; }
   const btn = document.getElementById('create-btn');
   btn.disabled = true;
   btn.textContent = 'Creating…';
-  socket.emit('create_room', res => {
+
+  const code = genCode();
+  // Peer ID must be lowercase for PeerJS Cloud
+  peer = new Peer(code.toLowerCase(), { debug: 0 });
+
+  peer.on('open', () => {
+    myIdx = 0;
+    isHost = true;
+    document.getElementById('room-code').textContent = code;
+    const link = `${location.origin}${location.pathname}?room=${code}`;
+    document.getElementById('share-url').textContent = link;
     btn.disabled = false;
     btn.textContent = 'Create Game — Player 1';
-    if (res.error) { showErr(res.error); return; }
-    myIdx = 0;
-    const code = res.roomId;
-    document.getElementById('room-code').textContent = code;
-    const link = `${location.origin}?room=${code}`;
-    document.getElementById('share-url').textContent = link;
     show('wait-screen');
+  });
+
+  peer.on('connection', incoming => {
+    conn = incoming;
+    conn.on('open', () => {
+      conn.on('data', onDataFromP2);
+      conn.on('close', onPeerLeft);
+      setupGameScreen();
+      show('game-screen');
+      beginCountdown();
+    });
+  });
+
+  peer.on('error', err => {
+    btn.disabled = false;
+    btn.textContent = 'Create Game — Player 1';
+    if (err.type === 'unavailable-id') {
+      // ID collision (very rare) — retry automatically
+      document.getElementById('create-btn').click();
+    } else {
+      showErr('Could not create room: ' + (err.message || err.type));
+    }
   });
 });
 
+// ── Lobby: Join Game (P2) ─────────────────────────────────────────────────────
 document.getElementById('join-btn').addEventListener('click', () => {
-  if (!socket.connected) { showErr('Not connected to server'); return; }
   const code = document.getElementById('code-input').value.trim().toUpperCase();
   if (code.length < 6) { showErr('Enter the 6-character room code'); return; }
+
   const btn = document.getElementById('join-btn');
   btn.disabled = true;
   btn.textContent = 'Joining…';
-  socket.emit('join_room', { roomId: code }, res => {
+
+  peer = new Peer({ debug: 0 });
+
+  peer.on('open', () => {
+    conn = peer.connect(code.toLowerCase(), { reliable: true, serialization: 'json' });
+
+    let opened = false;
+    conn.on('open', () => {
+      opened = true;
+      myIdx = 1;
+      isHost = false;
+      conn.on('data', onDataFromP1);
+      conn.on('close', onPeerLeft);
+      btn.disabled = false;
+      btn.textContent = 'Join Game — Player 2';
+      setupGameScreen();
+      show('game-screen');
+    });
+
+    // Timeout if host not found within 8s
+    setTimeout(() => {
+      if (!opened) {
+        btn.disabled = false;
+        btn.textContent = 'Join Game — Player 2';
+        showErr('Room not found — check the code and try again');
+        peer.destroy();
+        peer = null;
+      }
+    }, 8000);
+  });
+
+  peer.on('error', err => {
     btn.disabled = false;
     btn.textContent = 'Join Game — Player 2';
-    if (res.error) { showErr(res.error); return; }
-    myIdx = 1;
-    setupGameScreen();
-    show('game-screen');
+    showErr('Connection failed: ' + (err.message || err.type));
   });
 });
 
+// ── Copy link ─────────────────────────────────────────────────────────────────
 document.getElementById('copy-btn').addEventListener('click', () => {
-  const link = `${location.origin}?room=${document.getElementById('room-code').textContent}`;
+  const code = document.getElementById('room-code').textContent;
+  const link = `${location.origin}${location.pathname}?room=${code}`;
   navigator.clipboard?.writeText(link).then(() => {
-    const btn = document.getElementById('copy-btn');
-    btn.textContent = 'Copied ✓';
-    setTimeout(() => { btn.textContent = 'Copy Link'; }, 2000);
+    const b = document.getElementById('copy-btn');
+    b.textContent = 'Copied ✓';
+    setTimeout(() => { b.textContent = 'Copy Link'; }, 2000);
   });
 });
 
-// ── Socket events ─────────────────────────────────────────────────────────────
-socket.on('peer_joined', () => {
-  setupGameScreen();
-  show('game-screen');
-});
-
-socket.on('state', newState => {
-  // Detect game reset to clear local trails
-  if (gameState && gameState.winner !== null && newState.winner === null) {
-    trails = [[], []];
-  }
-  gameState = newState;
-  refreshUI();
-  refreshBtn();
-});
-
-socket.on('peer_left', () => {
-  if (gameState) { gameState.gameActive = false; gameState.winner = null; }
+// ── Peer disconnect ───────────────────────────────────────────────────────────
+function onPeerLeft() {
+  stopTimers();
+  if (gameState) gameState.gameActive = false;
   document.getElementById('status').textContent = 'Opponent disconnected';
   refreshBtn();
-});
+}
 
-// ── Game screen ───────────────────────────────────────────────────────────────
+// ── P2 → P1 messages ─────────────────────────────────────────────────────────
+function onDataFromP2(data) {
+  if (!gameState) return;
+  if (data.type === 'switch' && gameState.gameActive) doSwitch(gameState, 1);
+  if (data.type === 'restart' && gameState.winner !== null) restartGame();
+}
+
+// ── P1 → P2 messages ─────────────────────────────────────────────────────────
+function onDataFromP1(data) {
+  if (data.type !== 'state') return;
+  const s = data.state;
+  if (gameState && gameState.winner !== null && s.winner === null) trails = [[], []];
+  gameState = s;
+  refreshUI();
+  refreshBtn();
+}
+
+// ── Broadcast state to peer (P1 only) ────────────────────────────────────────
+function broadcast() {
+  if (conn && conn.open) conn.send({ type: 'state', state: gameState });
+}
+
+// ── Game logic (runs in P1's browser) ────────────────────────────────────────
+function makeState() {
+  return {
+    players: [
+      { hoop: 0, angle: Math.PI * 0.5, speed: 0.018, dir:  1, score: 0, lapCount: 0, lastAngle: Math.PI * 0.5, switchCooldown: 0 },
+      { hoop: 2, angle: Math.PI * 1.5, speed: 0.022, dir: -1, score: 0, lapCount: 0, lastAngle: Math.PI * 1.5, switchCooldown: 0 },
+    ],
+    stars: genStars(),
+    gameActive: false,
+    winner: null,
+    countdown: null,
+  };
+}
+
+function genStars() {
+  const s = [];
+  for (let h = 0; h < 3; h++) {
+    s.push(
+      { hoop: h, angle: Math.random() * Math.PI * 2,           collected: false },
+      { hoop: h, angle: Math.random() * Math.PI * 2 + Math.PI, collected: false }
+    );
+  }
+  return s;
+}
+
+function doSwitch(state, idx) {
+  const p = state.players[idx];
+  if (p.switchCooldown > 0) return;
+  const pos = hPos(p.hoop, p.angle);
+  let best = null, bestDiff = Infinity;
+  HOOPS.forEach((h, i) => {
+    if (i === p.hoop) return;
+    const dx = pos.x - h.x, dy = pos.y - h.y;
+    const diff = Math.abs(Math.sqrt(dx * dx + dy * dy) - h.r);
+    if (diff < 28 && diff < bestDiff) { bestDiff = diff; best = i; }
+  });
+  if (best !== null) {
+    const h = HOOPS[best];
+    p.angle = Math.atan2(pos.y - h.y, pos.x - h.x);
+    p.hoop = best;
+    p.switchCooldown = SW_COOL;
+  }
+}
+
+function tick(state, dt) {
+  if (!state.gameActive) return;
+  state.players.forEach((p, i) => {
+    p.angle += p.speed * p.dir;
+    if (p.switchCooldown > 0) p.switchCooldown = Math.max(0, p.switchCooldown - dt);
+
+    const a  = ((p.angle     % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    const la = ((p.lastAngle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    if (p.dir > 0 ? (la > 5.5 && a < 0.8) : (la < 0.8 && a > 5.5)) p.lapCount++;
+    p.lastAngle = p.angle;
+
+    const pos = hPos(p.hoop, p.angle);
+    for (const s of state.stars) {
+      if (s.collected || s.hoop !== p.hoop) continue;
+      const sp = hPos(s.hoop, s.angle);
+      const dx = pos.x - sp.x, dy = pos.y - sp.y;
+      if (dx * dx + dy * dy < 324) {
+        s.collected = true;
+        p.score++;
+        if (p.score >= WIN_SCORE) { state.gameActive = false; state.winner = i; }
+        setTimeout(() => { s.hoop = Math.floor(Math.random() * 3); s.angle = Math.random() * Math.PI * 2; s.collected = false; }, STAR_RESP);
+      }
+    }
+  });
+}
+
+function stopTimers() {
+  if (gameTimer) { clearInterval(gameTimer); gameTimer = null; }
+  if (cdTimer)   { clearInterval(cdTimer);   cdTimer   = null; }
+}
+
+function beginCountdown() {
+  stopTimers();
+  trails = [[], []];
+  gameState = makeState();
+  gameState.countdown = 3;
+  broadcast(); refreshUI(); refreshBtn();
+
+  let n = 3;
+  cdTimer = setInterval(() => {
+    n--;
+    if (n <= 0) {
+      clearInterval(cdTimer); cdTimer = null;
+      gameState.countdown = 0;
+      broadcast(); refreshUI();
+      setTimeout(() => {
+        gameState.countdown = null;
+        gameState.gameActive = true;
+        broadcast(); refreshUI(); refreshBtn();
+        startLoop();
+      }, 600);
+    } else {
+      gameState.countdown = n;
+      broadcast(); refreshUI();
+    }
+  }, 1000);
+}
+
+function startLoop() {
+  let last = Date.now();
+  gameTimer = setInterval(() => {
+    const now = Date.now();
+    tick(gameState, now - last);
+    last = now;
+    broadcast();
+    if (!gameState.gameActive) {
+      clearInterval(gameTimer); gameTimer = null;
+      refreshUI(); refreshBtn(); broadcast();
+    }
+  }, TICK_MS);
+}
+
+function restartGame() {
+  stopTimers();
+  setTimeout(beginCountdown, 400);
+}
+
+// ── Game screen setup ─────────────────────────────────────────────────────────
 function setupGameScreen() {
   document.getElementById(myIdx === 0 ? 'you1' : 'you2').style.display = 'inline';
-
   const btn = document.getElementById('sw-btn');
   if (myIdx === 0) {
-    btn.style.background   = 'rgba(110,198,245,0.12)';
-    btn.style.borderColor  = 'rgba(110,198,245,0.55)';
-    btn.style.color        = '#6ec6f5';
+    btn.style.background  = 'rgba(110,198,245,0.12)';
+    btn.style.borderColor = 'rgba(110,198,245,0.55)';
+    btn.style.color       = '#6ec6f5';
   } else {
-    btn.style.background   = 'rgba(245,160,110,0.12)';
-    btn.style.borderColor  = 'rgba(245,160,110,0.55)';
-    btn.style.color        = '#f5a06e';
+    btn.style.background  = 'rgba(245,160,110,0.12)';
+    btn.style.borderColor = 'rgba(245,160,110,0.55)';
+    btn.style.color       = '#f5a06e';
   }
-
   scaleCanvas();
   window.addEventListener('resize', scaleCanvas);
   requestAnimationFrame(renderLoop);
@@ -294,16 +480,17 @@ const swBtn = document.getElementById('sw-btn');
 function handleSwitch() {
   if (!gameState) return;
   if (gameState.gameActive) {
-    socket.emit('switch');
-  } else if (gameState.winner !== null && myIdx === 0) {
-    socket.emit('restart');
+    if (isHost) doSwitch(gameState, 0);          // P1: direct
+    else conn?.send({ type: 'switch' });          // P2: tell P1
+  } else if (gameState.winner !== null) {
+    if (myIdx === 0) restartGame();               // P1: restart directly
+    else conn?.send({ type: 'restart' });         // P2: ask P1
   }
 }
 
 swBtn.addEventListener('touchstart', e => { e.preventDefault(); handleSwitch(); }, { passive: false });
 swBtn.addEventListener('click', handleSwitch);
 
-// Keyboard fallback for desktop testing
 document.addEventListener('keydown', e => {
   if (myIdx === 0 && (e.key === 'a' || e.key === 'A')) handleSwitch();
   if (myIdx === 1 && (e.key === 'l' || e.key === 'L')) handleSwitch();
@@ -311,23 +498,14 @@ document.addEventListener('keydown', e => {
 
 function refreshBtn() {
   const s = gameState;
-  if (!s || s.countdown !== null) {
-    swBtn.textContent = 'SWITCH';
-    swBtn.disabled = true;
-    return;
-  }
-  if (s.gameActive) {
-    swBtn.textContent = 'SWITCH';
-    swBtn.disabled = false;
-    return;
-  }
+  if (!s || s.countdown !== null) { swBtn.textContent = 'SWITCH'; swBtn.disabled = true; return; }
+  if (s.gameActive)               { swBtn.textContent = 'SWITCH'; swBtn.disabled = false; return; }
   if (s.winner !== null) {
     if (myIdx === 0) { swBtn.textContent = 'PLAY AGAIN'; swBtn.disabled = false; }
     else             { swBtn.textContent = 'WAITING…';   swBtn.disabled = true;  }
     return;
   }
-  swBtn.textContent = 'SWITCH';
-  swBtn.disabled = true;
+  swBtn.textContent = 'SWITCH'; swBtn.disabled = true;
 }
 
 // ── UI text ───────────────────────────────────────────────────────────────────
@@ -335,7 +513,6 @@ function refreshUI() {
   if (!gameState) return;
   document.getElementById('s1').textContent = gameState.players[0].score;
   document.getElementById('s2').textContent = gameState.players[1].score;
-
   const { countdown, gameActive, winner } = gameState;
   const el = document.getElementById('status');
   if (countdown !== null && countdown > 0) el.textContent = `Starting in ${countdown}…`;
@@ -346,20 +523,13 @@ function refreshUI() {
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
-function hPos(hoop, angle) {
-  const h = HOOPS[hoop];
-  return { x: h.x + Math.cos(angle) * h.r, y: h.y + Math.sin(angle) * h.r };
-}
-
 function drawHoop(h, idx) {
   ctx.save();
-  ctx.strokeStyle = 'rgba(180,180,220,0.18)';
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(180,180,220,0.18)'; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.arc(h.x, h.y, h.r, 0, Math.PI * 2); ctx.stroke();
   if (idx < HOOPS.length - 1) {
     const ix = (h.x + HOOPS[idx + 1].x) / 2;
-    ctx.strokeStyle = 'rgba(180,180,220,0.12)';
-    ctx.setLineDash([4, 8]); ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(180,180,220,0.12)'; ctx.setLineDash([4, 8]); ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(ix - 18, h.y - 2); ctx.lineTo(ix + 18, h.y - 2); ctx.stroke();
     ctx.setLineDash([]);
   }
@@ -376,8 +546,7 @@ function drawStar(s) {
   for (let i = 0; i < 10; i++) {
     const r = i % 2 === 0 ? 9 : 4;
     const a = (i / 10) * Math.PI * 2 - Math.PI / 2;
-    i === 0 ? ctx.moveTo(r * Math.cos(a), r * Math.sin(a))
-            : ctx.lineTo(r * Math.cos(a), r * Math.sin(a));
+    i === 0 ? ctx.moveTo(r * Math.cos(a), r * Math.sin(a)) : ctx.lineTo(r * Math.cos(a), r * Math.sin(a));
   }
   ctx.closePath(); ctx.fill();
   ctx.restore();
@@ -386,20 +555,16 @@ function drawStar(s) {
 function drawTrain(p, idx) {
   const { x, y } = hPos(p.hoop, p.angle);
   const col = P_COLORS[idx], rgb = P_RGB[idx];
-
   trails[idx].push({ x, y });
   if (trails[idx].length > 20) trails[idx].shift();
-
   ctx.save();
   trails[idx].forEach((pt, i) => {
     ctx.fillStyle = `rgba(${rgb},${(i / trails[idx].length) * 0.35})`;
     ctx.beginPath(); ctx.arc(pt.x, pt.y, 3 * (i / trails[idx].length), 0, Math.PI * 2); ctx.fill();
   });
   ctx.restore();
-
   const h = HOOPS[p.hoop];
   const tang = Math.atan2(y - h.y, x - h.x) + Math.PI / 2 * p.dir;
-
   ctx.save();
   ctx.translate(x, y); ctx.rotate(tang);
   ctx.fillStyle = col; ctx.shadowColor = col; ctx.shadowBlur = 12;
@@ -409,7 +574,6 @@ function drawTrain(p, idx) {
   ctx.fillStyle = col;
   ctx.beginPath(); ctx.arc(-3, -5, 2, 0, Math.PI * 2); ctx.arc(3, -5, 2, 0, Math.PI * 2); ctx.fill();
   ctx.restore();
-
   if (p.switchCooldown > 0) {
     const frac = p.switchCooldown / SW_COOL;
     ctx.save();
@@ -423,8 +587,7 @@ function drawOverlay(big, small, color) {
   ctx.save();
   ctx.fillStyle = 'rgba(26,26,46,0.85)'; ctx.fillRect(0, 0, W, H);
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillStyle = color || '#e8e8f0';
-  ctx.font = 'bold 42px system-ui';
+  ctx.fillStyle = color || '#e8e8f0'; ctx.font = 'bold 42px system-ui';
   ctx.fillText(big, W / 2, H / 2 - (small ? 24 : 0));
   if (small) {
     ctx.font = '16px system-ui'; ctx.fillStyle = 'rgba(255,255,255,0.45)';
@@ -437,25 +600,18 @@ function renderLoop() {
   requestAnimationFrame(renderLoop);
   ctx.fillStyle = '#1a1a2e'; ctx.fillRect(0, 0, W, H);
   HOOPS.forEach(drawHoop);
-
-  if (!gameState) { drawOverlay('Connecting…', null, '#e8e8f0'); return; }
-
+  if (!gameState) { drawOverlay('Waiting…', null, '#e8e8f0'); return; }
   const { players, stars, gameActive, winner, countdown } = gameState;
   stars.forEach(drawStar);
   players.forEach(drawTrain);
-
   if (countdown !== null) {
     drawOverlay(countdown > 0 ? String(countdown) : 'GO!', 'Get ready…', '#e8e8f0');
   } else if (winner !== null) {
-    drawOverlay(
-      `Player ${winner + 1} Wins!`,
-      `P1: ${players[0].score} pts  |  P2: ${players[1].score} pts`,
-      P_COLORS[winner]
-    );
+    drawOverlay(`Player ${winner + 1} Wins!`, `P1: ${players[0].score} pts  |  P2: ${players[1].score} pts`, P_COLORS[winner]);
   }
 }
 
-// Initial canvas paint (before any socket connection)
+// Initial canvas paint
 ctx.fillStyle = '#1a1a2e'; ctx.fillRect(0, 0, W, H);
 HOOPS.forEach(drawHoop);
 </script>
