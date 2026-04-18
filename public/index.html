@@ -374,8 +374,9 @@ function doSwitch(state, idx) {
 
 function tick(state, dt) {
   if (!state.gameActive) return;
+  const scale = dt / (1000 / 60); // normalize to original 60 fps speed
   state.players.forEach((p, i) => {
-    p.angle += p.speed * p.dir;
+    p.angle += p.speed * p.dir * scale;
     if (p.switchCooldown > 0) p.switchCooldown = Math.max(0, p.switchCooldown - dt);
 
     const a  = ((p.angle     % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
