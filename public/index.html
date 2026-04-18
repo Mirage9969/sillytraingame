@@ -10,7 +10,6 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; background: #12121f; color: #e8e8f0; font-family: system-ui, -apple-system, sans-serif; }
 
-/* ── Lobby / Waiting screens ─────────────────────────────────────────────── */
 .screen {
   display: none; flex-direction: column; align-items: center; justify-content: center;
   gap: 16px; min-height: 100dvh; padding: 28px 24px; max-width: 440px; margin: 0 auto;
@@ -20,6 +19,14 @@ html, body { height: 100%; background: #12121f; color: #e8e8f0; font-family: sys
 .title  { font-size: 30px; font-weight: 900; letter-spacing: -1px; }
 .sub    { font-size: 14px; color: rgba(255,255,255,0.4); text-align: center; line-height: 1.65; }
 .err    { font-size: 13px; color: #ff6b6b; min-height: 18px; text-align: center; }
+
+.btn-host {
+  width: 100%; padding: 17px; border-radius: 14px; font-size: 16px; font-weight: 700; cursor: pointer;
+  background: rgba(180,180,220,0.1); border: 1px solid rgba(180,180,220,0.4); color: #c8c8e8;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn-host:active:not(:disabled) { background: rgba(180,180,220,0.22); }
+.btn-host:disabled { opacity: 0.4; cursor: default; }
 
 .btn-p1 {
   width: 100%; padding: 17px; border-radius: 14px; font-size: 16px; font-weight: 700; cursor: pointer;
@@ -51,8 +58,8 @@ html, body { height: 100%; background: #12121f; color: #e8e8f0; font-family: sys
 }
 .code-input:focus { border-color: rgba(245,160,110,0.5); }
 
-.big-code   { font-size: 52px; font-weight: 900; letter-spacing: 10px; color: #6ec6f5; }
-.share-box  {
+.big-code  { font-size: 52px; font-weight: 900; letter-spacing: 10px; color: #6ec6f5; }
+.share-box {
   width: 100%; padding: 12px 14px; border-radius: 10px;
   background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
   font-size: 12px; color: rgba(255,255,255,0.35); text-align: center; word-break: break-all;
@@ -66,7 +73,6 @@ html, body { height: 100%; background: #12121f; color: #e8e8f0; font-family: sys
 .btn-copy:active { background: rgba(255,255,255,0.08); }
 .wait-label { font-size: 14px; color: rgba(255,255,255,0.35); }
 
-/* ── Game screen ─────────────────────────────────────────────────────────── */
 #game-screen { display: none; flex-direction: column; height: 100dvh; padding: 8px; gap: 8px; }
 #game-screen.active { display: flex; }
 
@@ -100,21 +106,23 @@ html, body { height: 100%; background: #12121f; color: #e8e8f0; font-family: sys
 <div class="screen active" id="lobby-screen">
   <div class="title">Hoop Trains</div>
   <p class="sub">Race around circular hoops, switch tracks, collect stars.<br>First to 5 points wins!</p>
+  <button class="btn-host" id="host-btn">Host a Game</button>
+  <div class="divider">or play directly</div>
   <button class="btn-p1" id="create-btn">Create Game — Player 1</button>
-  <div class="divider">or join as Player 2</div>
+  <div class="divider">or join a game</div>
   <input class="code-input" id="code-input" type="text" maxlength="6" placeholder="ROOM CODE" autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false">
-  <button class="btn-p2" id="join-btn">Join Game — Player 2</button>
+  <button class="btn-p2" id="join-btn">Join Game</button>
   <p class="err" id="lobby-err"></p>
 </div>
 
-<!-- ── Waiting (P1 sees this until P2 joins) ─────────────────────────────── -->
+<!-- ── Waiting ────────────────────────────────────────────────────────────── -->
 <div class="screen" id="wait-screen">
-  <p class="sub" style="color:rgba(110,198,245,0.8);font-weight:700">You are Player 1</p>
-  <p class="sub">Share this code with Player 2:</p>
+  <p class="sub" id="wait-role" style="font-weight:700">You are Player 1</p>
+  <p class="sub" id="wait-desc">Share this code with Player 2:</p>
   <div class="big-code" id="room-code">------</div>
   <div class="share-box" id="share-url"></div>
   <button class="btn-copy" id="copy-btn">Copy Link</button>
-  <p class="wait-label">Waiting for Player 2…</p>
+  <p class="wait-label" id="wait-status">Waiting for Player 2…</p>
 </div>
 
 <!-- ── Game ──────────────────────────────────────────────────────────────── -->
@@ -145,23 +153,42 @@ const HOOPS = [
   { x: 340, y: 210, r: 120 },
   { x: 510, y: 210, r: 120 },
 ];
-const P_COLORS    = ['#6ec6f5', '#f5a06e'];
-const P_RGB       = ['110,198,245', '245,160,110'];
-const STAR_COL    = '#f5e56e';
-const SW_COOL     = 1200;
-const WIN_SCORE   = 5;
-const STAR_RESP   = 1800;
-const TICK_MS     = 33; // ~30 fps physics
+const P_COLORS  = ['#6ec6f5', '#f5a06e'];
+const P_RGB     = ['110,198,245', '245,160,110'];
+const STAR_COL  = '#f5e56e';
+const SW_COOL   = 1200;
+const WIN_SCORE = 5;
+const STAR_RESP = 1800;
+const TICK_MS   = 33;
 
-// ── App state ────────────────────────────────────────────────────────────────
-let peer       = null;  // PeerJS instance
-let conn       = null;  // DataConnection to the other player
-let myIdx      = null;  // 0 = P1 (host), 1 = P2 (guest)
-let isHost     = false;
+// ── Roles ─────────────────────────────────────────────────────────────────────
+//
+//  HOST (dedicated):  isHost=true,  isServer=true,  myIdx=null
+//    – runs the game loop; P1 and P2 both connect remotely
+//    – playerConns = [p1Conn, p2Conn]
+//
+//  PLAYER 1 (P2P):    isHost=true,  isServer=false, myIdx=0
+//    – runs the game loop AND plays; P2 connects remotely
+//    – playerConns = ['local', p2Conn]
+//
+//  REMOTE PLAYER:     isHost=false, isServer=false, myIdx=0|1
+//    – receives state from host; sends switch events via hostConn
+//
+// ─────────────────────────────────────────────────────────────────────────────
+let isHost       = false;
+let isServer     = false;
+let myIdx        = null;
+
+let peer         = null;
+let hostConn     = null;          // remote player → host
+let playerConns  = [null, null];  // host → players (indexed by player slot)
+
+// ── Game state ────────────────────────────────────────────────────────────────
 let gameState  = null;
 let trails     = [[], []];
 let gameTimer  = null;
 let cdTimer    = null;
+let renderStarted = false;
 
 // ── Canvas ───────────────────────────────────────────────────────────────────
 const canvas = document.getElementById('gc');
@@ -193,96 +220,165 @@ function genCode() {
   return s;
 }
 
+function setWaitScreen(role, desc, status, roleColor) {
+  document.getElementById('wait-role').textContent = role;
+  document.getElementById('wait-role').style.color = roleColor || 'rgba(110,198,245,0.8)';
+  document.getElementById('wait-desc').textContent = desc;
+  document.getElementById('wait-status').textContent = status;
+}
+
+function updateWaitStatus(joined) {
+  document.getElementById('wait-status').textContent =
+    joined >= 2 ? 'Both players ready — starting…'
+    : `Waiting for players… (${joined}/2)`;
+}
+
 // Pre-fill room code from URL
 const urlCode = new URLSearchParams(location.search).get('room');
 if (urlCode) document.getElementById('code-input').value = urlCode.toUpperCase();
 
-// ── Lobby: Create Game (P1) ───────────────────────────────────────────────────
-document.getElementById('create-btn').addEventListener('click', () => {
-  const btn = document.getElementById('create-btn');
-  btn.disabled = true;
-  btn.textContent = 'Creating…';
+// ── Lobby: Host Game ──────────────────────────────────────────────────────────
+document.getElementById('host-btn').addEventListener('click', () => {
+  const btn = document.getElementById('host-btn');
+  btn.disabled = true; btn.textContent = 'Setting up…';
 
   const code = genCode();
-  // Peer ID must be lowercase for PeerJS Cloud
   peer = new Peer(code.toLowerCase(), { debug: 0 });
 
   peer.on('open', () => {
-    myIdx = 0;
-    isHost = true;
+    isHost = true; isServer = true; myIdx = null;
+    playerConns = [null, null];
+    setWaitScreen(
+      'You are the Host',
+      'Share this code with both players:',
+      'Waiting for players… (0/2)',
+      'rgba(180,180,220,0.8)'
+    );
     document.getElementById('room-code').textContent = code;
     const link = `${location.origin}${location.pathname}?room=${code}`;
     document.getElementById('share-url').textContent = link;
-    btn.disabled = false;
-    btn.textContent = 'Create Game — Player 1';
+    btn.disabled = false; btn.textContent = 'Host a Game';
     show('wait-screen');
   });
 
-  peer.on('connection', incoming => {
-    conn = incoming;
-    conn.on('open', () => {
-      conn.on('data', onDataFromP2);
-      conn.on('close', onPeerLeft);
-      show('game-screen');
-      setupGameScreen();
-      beginCountdown();
-    });
-  });
+  peer.on('connection', onIncomingConnection);
 
   peer.on('error', err => {
-    btn.disabled = false;
-    btn.textContent = 'Create Game — Player 1';
-    if (err.type === 'unavailable-id') {
-      // ID collision (very rare) — retry automatically
-      document.getElementById('create-btn').click();
-    } else {
-      showErr('Could not create room: ' + (err.message || err.type));
-    }
+    btn.disabled = false; btn.textContent = 'Host a Game';
+    if (err.type === 'unavailable-id') document.getElementById('host-btn').click();
+    else showErr('Could not host: ' + (err.message || err.type));
   });
 });
 
-// ── Lobby: Join Game (P2) ─────────────────────────────────────────────────────
+// ── Lobby: Create Game — P1 (P2P) ─────────────────────────────────────────────
+document.getElementById('create-btn').addEventListener('click', () => {
+  const btn = document.getElementById('create-btn');
+  btn.disabled = true; btn.textContent = 'Creating…';
+
+  const code = genCode();
+  peer = new Peer(code.toLowerCase(), { debug: 0 });
+
+  peer.on('open', () => {
+    isHost = true; isServer = false; myIdx = 0;
+    playerConns = ['local', null]; // slot 0 = local P1, slot 1 = remote P2
+    setWaitScreen(
+      'You are Player 1',
+      'Share this code with Player 2:',
+      'Waiting for Player 2…',
+      'rgba(110,198,245,0.8)'
+    );
+    document.getElementById('room-code').textContent = code;
+    const link = `${location.origin}${location.pathname}?room=${code}`;
+    document.getElementById('share-url').textContent = link;
+    btn.disabled = false; btn.textContent = 'Create Game — Player 1';
+    show('wait-screen');
+  });
+
+  peer.on('connection', onIncomingConnection);
+
+  peer.on('error', err => {
+    btn.disabled = false; btn.textContent = 'Create Game — Player 1';
+    if (err.type === 'unavailable-id') document.getElementById('create-btn').click();
+    else showErr('Could not create room: ' + (err.message || err.type));
+  });
+});
+
+// ── Shared: incoming connection handler (used by both host types) ─────────────
+function onIncomingConnection(incoming) {
+  // Find next available remote slot
+  const idx = playerConns.indexOf(null);
+  if (idx === -1) { incoming.close(); return; } // room full
+
+  incoming.on('open', () => {
+    playerConns[idx] = incoming;
+    incoming.on('data', data => onDataFromPlayer(data, idx));
+    incoming.on('close', () => {
+      playerConns[idx] = null;
+      if (gameState) gameState.gameActive = false;
+      document.getElementById('status').textContent = `Player ${idx + 1} disconnected`;
+      refreshBtn();
+    });
+
+    // Tell the player their assigned index
+    incoming.send({ type: 'assigned', idx });
+
+    // Count remote connections (exclude 'local' sentinel)
+    const remoteCount = playerConns.filter(c => c && c !== 'local').length;
+
+    if (isServer) {
+      // Dedicated host: need both players
+      updateWaitStatus(remoteCount);
+      if (playerConns[0] && playerConns[1]) {
+        show('game-screen');
+        setupGameScreen();
+        beginCountdown();
+      }
+    } else {
+      // P2P: P2 just joined
+      show('game-screen');
+      setupGameScreen();
+      beginCountdown();
+    }
+  });
+}
+
+// ── Lobby: Join Game ──────────────────────────────────────────────────────────
 document.getElementById('join-btn').addEventListener('click', () => {
   const code = document.getElementById('code-input').value.trim().toUpperCase();
   if (code.length < 6) { showErr('Enter the 6-character room code'); return; }
 
   const btn = document.getElementById('join-btn');
-  btn.disabled = true;
-  btn.textContent = 'Joining…';
+  btn.disabled = true; btn.textContent = 'Joining…';
 
   peer = new Peer({ debug: 0 });
 
   peer.on('open', () => {
-    conn = peer.connect(code.toLowerCase(), { reliable: true, serialization: 'json' });
+    hostConn = peer.connect(code.toLowerCase(), { reliable: true, serialization: 'json' });
 
     let opened = false;
-    conn.on('open', () => {
+    hostConn.on('open', () => {
       opened = true;
-      myIdx = 1;
       isHost = false;
-      conn.on('data', onDataFromP1);
-      conn.on('close', onPeerLeft);
-      btn.disabled = false;
-      btn.textContent = 'Join Game — Player 2';
+      hostConn.on('data', onDataFromHost);
+      hostConn.on('close', onPeerLeft);
+      btn.disabled = false; btn.textContent = 'Join Game';
+      // Show game screen immediately — assignment arrives in milliseconds
       show('game-screen');
-      setupGameScreen();
+      startRenderLoop();
+      scaleCanvas();
     });
 
-    // Timeout if host not found within 8s
     setTimeout(() => {
       if (!opened) {
-        btn.disabled = false;
-        btn.textContent = 'Join Game — Player 2';
+        btn.disabled = false; btn.textContent = 'Join Game';
         showErr('Room not found — check the code and try again');
-        peer.destroy();
-        peer = null;
+        peer.destroy(); peer = null;
       }
     }, 8000);
   });
 
   peer.on('error', err => {
-    btn.disabled = false;
-    btn.textContent = 'Join Game — Player 2';
+    btn.disabled = false; btn.textContent = 'Join Game';
     showErr('Connection failed: ' + (err.message || err.type));
   });
 });
@@ -302,19 +398,28 @@ document.getElementById('copy-btn').addEventListener('click', () => {
 function onPeerLeft() {
   stopTimers();
   if (gameState) gameState.gameActive = false;
-  document.getElementById('status').textContent = 'Opponent disconnected';
+  document.getElementById('status').textContent = 'Host disconnected';
   refreshBtn();
 }
 
-// ── P2 → P1 messages ─────────────────────────────────────────────────────────
-function onDataFromP2(data) {
-  if (!gameState) return;
-  if (data.type === 'switch' && gameState.gameActive) doSwitch(gameState, 1);
-  if (data.type === 'restart' && gameState.winner !== null) restartGame();
-}
-
-// ── P1 → P2 messages ─────────────────────────────────────────────────────────
-function onDataFromP1(data) {
+// ── Data: host → player ───────────────────────────────────────────────────────
+function onDataFromHost(data) {
+  if (data.type === 'assigned') {
+    myIdx = data.idx;
+    // Style the switch button and YOU badge now that we know our index
+    document.getElementById(myIdx === 0 ? 'you1' : 'you2').style.display = 'inline';
+    const btn = document.getElementById('sw-btn');
+    if (myIdx === 0) {
+      btn.style.background  = 'rgba(110,198,245,0.12)';
+      btn.style.borderColor = 'rgba(110,198,245,0.55)';
+      btn.style.color       = '#6ec6f5';
+    } else {
+      btn.style.background  = 'rgba(245,160,110,0.12)';
+      btn.style.borderColor = 'rgba(245,160,110,0.55)';
+      btn.style.color       = '#f5a06e';
+    }
+    return;
+  }
   if (data.type !== 'state') return;
   const s = data.state;
   if (gameState && gameState.winner !== null && s.winner === null) trails = [[], []];
@@ -323,12 +428,21 @@ function onDataFromP1(data) {
   refreshBtn();
 }
 
-// ── Broadcast state to peer (P1 only) ────────────────────────────────────────
-function broadcast() {
-  if (conn && conn.open) conn.send({ type: 'state', state: gameState });
+// ── Data: player → host ───────────────────────────────────────────────────────
+function onDataFromPlayer(data, playerIdx) {
+  if (!gameState) return;
+  if (data.type === 'switch' && gameState.gameActive) doSwitch(gameState, playerIdx);
+  if (data.type === 'restart' && gameState.winner !== null) restartGame();
 }
 
-// ── Game logic (runs in P1's browser) ────────────────────────────────────────
+// ── Broadcast state to all remote players ─────────────────────────────────────
+function broadcast() {
+  playerConns.forEach(c => {
+    if (c && c !== 'local' && c.open) c.send({ type: 'state', state: gameState });
+  });
+}
+
+// ── Game logic (runs on host) ─────────────────────────────────────────────────
 function makeState() {
   return {
     players: [
@@ -374,24 +488,21 @@ function doSwitch(state, idx) {
 
 function tick(state, dt) {
   if (!state.gameActive) return;
-  const scale = dt / (1000 / 60); // normalize to original 60 fps speed
+  const scale = dt / (1000 / 60);
   state.players.forEach((p, i) => {
     p.angle += p.speed * p.dir * scale;
     if (p.switchCooldown > 0) p.switchCooldown = Math.max(0, p.switchCooldown - dt);
-
     const a  = ((p.angle     % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
     const la = ((p.lastAngle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
     if (p.dir > 0 ? (la > 5.5 && a < 0.8) : (la < 0.8 && a > 5.5)) p.lapCount++;
     p.lastAngle = p.angle;
-
     const pos = hPos(p.hoop, p.angle);
     for (const s of state.stars) {
       if (s.collected || s.hoop !== p.hoop) continue;
       const sp = hPos(s.hoop, s.angle);
       const dx = pos.x - sp.x, dy = pos.y - sp.y;
       if (dx * dx + dy * dy < 324) {
-        s.collected = true;
-        p.score++;
+        s.collected = true; p.score++;
         if (p.score >= WIN_SCORE) { state.gameActive = false; state.winner = i; }
         setTimeout(() => { s.hoop = Math.floor(Math.random() * 3); s.angle = Math.random() * Math.PI * 2; s.collected = false; }, STAR_RESP);
       }
@@ -419,8 +530,7 @@ function beginCountdown() {
       gameState.countdown = 0;
       broadcast(); refreshUI();
       setTimeout(() => {
-        gameState.countdown = null;
-        gameState.gameActive = true;
+        gameState.countdown = null; gameState.gameActive = true;
         broadcast(); refreshUI(); refreshBtn();
         startLoop();
       }, 600);
@@ -435,8 +545,7 @@ function startLoop() {
   let last = Date.now();
   gameTimer = setInterval(() => {
     const now = Date.now();
-    tick(gameState, now - last);
-    last = now;
+    tick(gameState, now - last); last = now;
     broadcast();
     if (!gameState.gameActive) {
       clearInterval(gameTimer); gameTimer = null;
@@ -450,21 +559,38 @@ function restartGame() {
   setTimeout(beginCountdown, 400);
 }
 
-// ── Game screen setup ─────────────────────────────────────────────────────────
+// ── Game screen ───────────────────────────────────────────────────────────────
 function setupGameScreen() {
-  document.getElementById(myIdx === 0 ? 'you1' : 'you2').style.display = 'inline';
-  const btn = document.getElementById('sw-btn');
-  if (myIdx === 0) {
-    btn.style.background  = 'rgba(110,198,245,0.12)';
-    btn.style.borderColor = 'rgba(110,198,245,0.55)';
-    btn.style.color       = '#6ec6f5';
-  } else {
-    btn.style.background  = 'rgba(245,160,110,0.12)';
-    btn.style.borderColor = 'rgba(245,160,110,0.55)';
-    btn.style.color       = '#f5a06e';
+  if (isServer) {
+    // Dedicated host: no player badge, neutral switch button (shows "HOST")
+    const btn = document.getElementById('sw-btn');
+    btn.style.background  = 'rgba(180,180,220,0.08)';
+    btn.style.borderColor = 'rgba(180,180,220,0.3)';
+    btn.style.color       = 'rgba(180,180,220,0.5)';
+  } else if (myIdx !== null) {
+    // P1/P2 who is also the host (P2P mode)
+    document.getElementById(myIdx === 0 ? 'you1' : 'you2').style.display = 'inline';
+    const btn = document.getElementById('sw-btn');
+    if (myIdx === 0) {
+      btn.style.background  = 'rgba(110,198,245,0.12)';
+      btn.style.borderColor = 'rgba(110,198,245,0.55)';
+      btn.style.color       = '#6ec6f5';
+    } else {
+      btn.style.background  = 'rgba(245,160,110,0.12)';
+      btn.style.borderColor = 'rgba(245,160,110,0.55)';
+      btn.style.color       = '#f5a06e';
+    }
   }
+  // Remote players (myIdx=null at this point) are styled in onDataFromHost
+
   scaleCanvas();
   window.addEventListener('resize', scaleCanvas);
+  startRenderLoop();
+}
+
+function startRenderLoop() {
+  if (renderStarted) return;
+  renderStarted = true;
   requestAnimationFrame(renderLoop);
 }
 
@@ -481,11 +607,17 @@ const swBtn = document.getElementById('sw-btn');
 function handleSwitch() {
   if (!gameState) return;
   if (gameState.gameActive) {
-    if (isHost) doSwitch(gameState, 0);          // P1: direct
-    else conn?.send({ type: 'switch' });          // P2: tell P1
+    if (isHost && myIdx === 0) {
+      doSwitch(gameState, 0);               // P2P P1: local
+    } else if (!isHost && hostConn?.open) {
+      hostConn.send({ type: 'switch' });    // remote player
+    }
   } else if (gameState.winner !== null) {
-    if (myIdx === 0) restartGame();               // P1: restart directly
-    else conn?.send({ type: 'restart' });         // P2: ask P1
+    if (isServer || myIdx === 0) {
+      restartGame();                         // host or P1: restart directly
+    } else if (hostConn?.open) {
+      hostConn.send({ type: 'restart' });   // remote P1 or P2: ask host
+    }
   }
 }
 
@@ -499,6 +631,19 @@ document.addEventListener('keydown', e => {
 
 function refreshBtn() {
   const s = gameState;
+
+  if (isServer) {
+    // Dedicated host shows "HOSTING" during play, "PLAY AGAIN" after game ends
+    if (!s || s.countdown !== null || s.gameActive) {
+      swBtn.textContent = 'HOSTING'; swBtn.disabled = true;
+    } else if (s.winner !== null) {
+      swBtn.textContent = 'PLAY AGAIN'; swBtn.disabled = false;
+    } else {
+      swBtn.textContent = 'HOSTING'; swBtn.disabled = true;
+    }
+    return;
+  }
+
   if (!s || s.countdown !== null) { swBtn.textContent = 'SWITCH'; swBtn.disabled = true; return; }
   if (s.gameActive)               { swBtn.textContent = 'SWITCH'; swBtn.disabled = false; return; }
   if (s.winner !== null) {
@@ -509,7 +654,7 @@ function refreshBtn() {
   swBtn.textContent = 'SWITCH'; swBtn.disabled = true;
 }
 
-// ── UI text ───────────────────────────────────────────────────────────────────
+// ── UI ────────────────────────────────────────────────────────────────────────
 function refreshUI() {
   if (!gameState) return;
   document.getElementById('s1').textContent = gameState.players[0].score;
@@ -601,10 +746,19 @@ function renderLoop() {
   requestAnimationFrame(renderLoop);
   ctx.fillStyle = '#1a1a2e'; ctx.fillRect(0, 0, W, H);
   HOOPS.forEach(drawHoop);
-  if (!gameState) { drawOverlay('Waiting…', null, '#e8e8f0'); return; }
+
+  if (!gameState) {
+    const msg = isServer
+      ? `Waiting for players… (${playerConns.filter(c => c && c !== 'local').length}/2)`
+      : 'Waiting…';
+    drawOverlay(msg, null, '#e8e8f0');
+    return;
+  }
+
   const { players, stars, gameActive, winner, countdown } = gameState;
   stars.forEach(drawStar);
   players.forEach(drawTrain);
+
   if (countdown !== null) {
     drawOverlay(countdown > 0 ? String(countdown) : 'GO!', 'Get ready…', '#e8e8f0');
   } else if (winner !== null) {
