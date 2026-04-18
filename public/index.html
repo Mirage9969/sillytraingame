@@ -223,8 +223,8 @@ document.getElementById('create-btn').addEventListener('click', () => {
     conn.on('open', () => {
       conn.on('data', onDataFromP2);
       conn.on('close', onPeerLeft);
-      setupGameScreen();
       show('game-screen');
+      setupGameScreen();
       beginCountdown();
     });
   });
@@ -264,8 +264,8 @@ document.getElementById('join-btn').addEventListener('click', () => {
       conn.on('close', onPeerLeft);
       btn.disabled = false;
       btn.textContent = 'Join Game — Player 2';
-      setupGameScreen();
       show('game-screen');
+      setupGameScreen();
     });
 
     // Timeout if host not found within 8s
