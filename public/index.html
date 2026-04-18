@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#12121f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Hoop Trains</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: #12121f; color: #e8e8f0; font-family: system-ui, -apple-system, sans-serif; }
+
+/* ── Lobby / Waiting screens ─────────────────────────────────────────────── */
+.screen {
+  display: none; flex-direction: column; align-items: center; justify-content: center;
+  gap: 16px; min-height: 100dvh; padding: 28px 24px; max-width: 440px; margin: 0 auto;
+}
+.screen.active { display: flex; }
+
+.title  { font-size: 30px; font-weight: 900; letter-spacing: -1px; }
+.sub    { font-size: 14px; color: rgba(255,255,255,0.4); text-align: center; line-height: 1.65; }
+.err    { font-size: 13px; color: #ff6b6b; min-height: 18px; text-align: center; }
+
+.btn-p1 {
+  width: 100%; padding: 17px; border-radius: 14px; font-size: 16px; font-weight: 700; cursor: pointer;
+  background: rgba(110,198,245,0.12); border: 1px solid rgba(110,198,245,0.5); color: #6ec6f5;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn-p1:active { background: rgba(110,198,245,0.25); }
+
+.btn-p2 {
+  width: 100%; padding: 17px; border-radius: 14px; font-size: 16px; font-weight: 700; cursor: pointer;
+  background: rgba(245,160,110,0.12); border: 1px solid rgba(245,160,110,0.5); color: #f5a06e;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn-p2:active { background: rgba(245,160,110,0.25); }
+
+.divider {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  font-size: 12px; color: rgba(255,255,255,0.2);
+}
+.divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: rgba(255,255,255,0.1); }
+
+.code-input {
+  width: 100%; padding: 16px; border-radius: 14px; outline: none;
+  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15);
+  color: #e8e8f0; font-size: 22px; font-weight: 900; letter-spacing: 6px;
+  text-align: center; text-transform: uppercase;
+}
+.code-input:focus { border-color: rgba(245,160,110,0.5); }
+
+.big-code   { font-size: 52px; font-weight: 900; letter-spacing: 10px; color: #6ec6f5; }
+.share-box  {
+  width: 100%; padding: 12px 14px; border-radius: 10px;
+  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+  font-size: 12px; color: rgba(255,255,255,0.35); text-align: center; word-break: break-all;
+}
+.btn-copy {
+  padding: 10px 22px; border-radius: 8px; cursor: pointer;
+  background: transparent; border: 1px solid rgba(255,255,255,0.2);
+  color: rgba(255,255,255,0.55); font-size: 13px;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn-copy:active { background: rgba(255,255,255,0.08); }
+.wait-label { font-size: 14px; color: rgba(255,255,255,0.35); }
+
+/* ── Game screen ─────────────────────────────────────────────────────────── */
+#game-screen { display: none; flex-direction: column; height: 100dvh; padding: 8px; gap: 8px; }
+#game-screen.active { display: flex; }
+
+#score-bar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 14px; background: rgba(255,255,255,0.06); border-radius: 10px;
+  flex-shrink: 0; font-size: 13px; gap: 8px;
+}
+.pi  { display: flex; align-items: center; gap: 6px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.pts { font-weight: 900; font-size: 17px; }
+.you { font-size: 10px; font-weight: 700; padding: 2px 5px; border-radius: 4px; }
+#status { font-size: 12px; color: rgba(255,255,255,0.35); text-align: center; flex: 1; }
+
+#canvas-wrap { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+#gc { display: block; background: #1a1a2e; border-radius: 10px; max-width: 100%; max-height: 100%; }
+
+#sw-btn {
+  flex-shrink: 0; width: 100%; padding: 20px; border-radius: 16px; border: 2px solid;
+  font-size: 22px; font-weight: 900; letter-spacing: 3px; cursor: pointer;
+  -webkit-tap-highlight-color: transparent; touch-action: manipulation; user-select: none;
+  transition: opacity 0.15s, transform 0.08s;
+}
+#sw-btn:active:not(:disabled) { transform: scale(0.97); }
+#sw-btn:disabled { opacity: 0.3; cursor: default; }
+</style>
+</head>
+<body>
+
+<!-- ── Lobby ─────────────────────────────────────────────────────────────── -->
+<div class="screen active" id="lobby-screen">
+  <div class="title">Hoop Trains</div>
+  <p class="sub">Race around circular hoops, switch tracks, collect stars.<br>First to 5 points wins!</p>
+  <button class="btn-p1" id="create-btn">Create Game — Player 1</button>
+  <div class="divider">or join as Player 2</div>
+  <input class="code-input" id="code-input" type="text" maxlength="6" placeholder="ROOM CODE" autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false">
+  <button class="btn-p2" id="join-btn">Join Game — Player 2</button>
+  <p class="err" id="lobby-err"></p>
+</div>
+
+<!-- ── Waiting (P1 sees this until P2 joins) ─────────────────────────────── -->
+<div class="screen" id="wait-screen">
+  <p class="sub" style="color:rgba(110,198,245,0.8);font-weight:700">You are Player 1</p>
+  <p class="sub">Share this code with Player 2:</p>
+  <div class="big-code" id="room-code">------</div>
+  <div class="share-box" id="share-url"></div>
+  <button class="btn-copy" id="copy-btn">Copy Link</button>
+  <p class="wait-label">Waiting for Player 2…</p>
+</div>
+
+<!-- ── Game ──────────────────────────────────────────────────────────────── -->
+<div id="game-screen">
+  <div id="score-bar">
+    <div class="pi">
+      <div class="dot" style="background:#6ec6f5"></div>
+      P1&nbsp;<span class="pts" id="s1">0</span>
+      <span class="you" id="you1" style="background:rgba(110,198,245,0.2);color:#6ec6f5;display:none">YOU</span>
+    </div>
+    <div id="status">●</div>
+    <div class="pi">
+      <span class="you" id="you2" style="background:rgba(245,160,110,0.2);color:#f5a06e;display:none">YOU</span>
+      <span class="pts" id="s2">0</span>&nbsp;P2
+      <div class="dot" style="background:#f5a06e"></div>
+    </div>
+  </div>
+  <div id="canvas-wrap"><canvas id="gc" width="680" height="420"></canvas></div>
+  <button id="sw-btn" disabled>SWITCH</button>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+// ── Constants ────────────────────────────────────────────────────────────────
+const W = 680, H = 420;
+const HOOPS = [
+  { x: 170, y: 210, r: 120 },
+  { x: 340, y: 210, r: 120 },
+  { x: 510, y: 210, r: 120 },
+];
+const P_COLORS = ['#6ec6f5', '#f5a06e'];
+const P_RGB    = ['110,198,245', '245,160,110'];
+const STAR_COL = '#f5e56e';
+const SW_COOL  = 1200;
+
+// ── App state ────────────────────────────────────────────────────────────────
+const socket = io();
+let myIdx     = null;   // 0 or 1
+let gameState = null;
+let trails    = [[], []];
+
+// ── Canvas ───────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('gc');
+const ctx    = canvas.getContext('2d');
+
+// ── Screen switcher ───────────────────────────────────────────────────────────
+function show(id) {
+  ['lobby-screen','wait-screen','game-screen'].forEach(sid => {
+    const el = document.getElementById(sid);
+    sid === id ? el.classList.add('active') : el.classList.remove('active');
+  });
+}
+
+// ── Lobby: pre-fill room code from URL ───────────────────────────────────────
+const urlCode = new URLSearchParams(location.search).get('room');
+if (urlCode) document.getElementById('code-input').value = urlCode.toUpperCase();
+
+// ── Lobby actions ─────────────────────────────────────────────────────────────
+function showErr(msg) {
+  const el = document.getElementById('lobby-err');
+  el.textContent = msg;
+  if (msg) setTimeout(() => { if (el.textContent === msg) el.textContent = ''; }, 3000);
+}
+
+document.getElementById('create-btn').addEventListener('click', () => {
+  socket.emit('create_room', res => {
+    if (res.error) { showErr(res.error); return; }
+    myIdx = 0;
+    const code = res.roomId;
+    document.getElementById('room-code').textContent = code;
+    const link = `${location.origin}?room=${code}`;
+    document.getElementById('share-url').textContent = link;
+    show('wait-screen');
+  });
+});
+
+document.getElementById('join-btn').addEventListener('click', () => {
+  const code = document.getElementById('code-input').value.trim().toUpperCase();
+  if (code.length < 6) { showErr('Enter the 6-character room code'); return; }
+  socket.emit('join_room', { roomId: code }, res => {
+    if (res.error) { showErr(res.error); return; }
+    myIdx = 1;
+    setupGameScreen();
+    show('game-screen');
+  });
+});
+
+document.getElementById('copy-btn').addEventListener('click', () => {
+  const link = `${location.origin}?room=${document.getElementById('room-code').textContent}`;
+  navigator.clipboard?.writeText(link).then(() => {
+    const btn = document.getElementById('copy-btn');
+    btn.textContent = 'Copied ✓';
+    setTimeout(() => { btn.textContent = 'Copy Link'; }, 2000);
+  });
+});
+
+// ── Socket events ─────────────────────────────────────────────────────────────
+socket.on('peer_joined', () => {
+  setupGameScreen();
+  show('game-screen');
+});
+
+socket.on('state', newState => {
+  // Detect game reset to clear local trails
+  if (gameState && gameState.winner !== null && newState.winner === null) {
+    trails = [[], []];
+  }
+  gameState = newState;
+  refreshUI();
+  refreshBtn();
+});
+
+socket.on('peer_left', () => {
+  if (gameState) { gameState.gameActive = false; gameState.winner = null; }
+  document.getElementById('status').textContent = 'Opponent disconnected';
+  refreshBtn();
+});
+
+// ── Game screen ───────────────────────────────────────────────────────────────
+function setupGameScreen() {
+  document.getElementById(myIdx === 0 ? 'you1' : 'you2').style.display = 'inline';
+
+  const btn = document.getElementById('sw-btn');
+  if (myIdx === 0) {
+    btn.style.background   = 'rgba(110,198,245,0.12)';
+    btn.style.borderColor  = 'rgba(110,198,245,0.55)';
+    btn.style.color        = '#6ec6f5';
+  } else {
+    btn.style.background   = 'rgba(245,160,110,0.12)';
+    btn.style.borderColor  = 'rgba(245,160,110,0.55)';
+    btn.style.color        = '#f5a06e';
+  }
+
+  scaleCanvas();
+  window.addEventListener('resize', scaleCanvas);
+  requestAnimationFrame(renderLoop);
+}
+
+function scaleCanvas() {
+  const wrap = document.getElementById('canvas-wrap');
+  const s = Math.min(wrap.clientWidth / W, wrap.clientHeight / H);
+  canvas.style.width  = Math.floor(W * s) + 'px';
+  canvas.style.height = Math.floor(H * s) + 'px';
+}
+
+// ── Switch button ─────────────────────────────────────────────────────────────
+const swBtn = document.getElementById('sw-btn');
+
+function handleSwitch() {
+  if (!gameState) return;
+  if (gameState.gameActive) {
+    socket.emit('switch');
+  } else if (gameState.winner !== null && myIdx === 0) {
+    socket.emit('restart');
+  }
+}
+
+swBtn.addEventListener('touchstart', e => { e.preventDefault(); handleSwitch(); }, { passive: false });
+swBtn.addEventListener('click', handleSwitch);
+
+// Keyboard fallback for desktop testing
+document.addEventListener('keydown', e => {
+  if (myIdx === 0 && (e.key === 'a' || e.key === 'A')) handleSwitch();
+  if (myIdx === 1 && (e.key === 'l' || e.key === 'L')) handleSwitch();
+});
+
+function refreshBtn() {
+  const s = gameState;
+  if (!s || s.countdown !== null) {
+    swBtn.textContent = 'SWITCH';
+    swBtn.disabled = true;
+    return;
+  }
+  if (s.gameActive) {
+    swBtn.textContent = 'SWITCH';
+    swBtn.disabled = false;
+    return;
+  }
+  if (s.winner !== null) {
+    if (myIdx === 0) { swBtn.textContent = 'PLAY AGAIN'; swBtn.disabled = false; }
+    else             { swBtn.textContent = 'WAITING…';   swBtn.disabled = true;  }
+    return;
+  }
+  swBtn.textContent = 'SWITCH';
+  swBtn.disabled = true;
+}
+
+// ── UI text ───────────────────────────────────────────────────────────────────
+function refreshUI() {
+  if (!gameState) return;
+  document.getElementById('s1').textContent = gameState.players[0].score;
+  document.getElementById('s2').textContent = gameState.players[1].score;
+
+  const { countdown, gameActive, winner } = gameState;
+  const el = document.getElementById('status');
+  if (countdown !== null && countdown > 0) el.textContent = `Starting in ${countdown}…`;
+  else if (countdown === 0)                el.textContent = 'GO!';
+  else if (winner !== null)                el.textContent = `P${winner + 1} wins!`;
+  else if (gameActive)                     el.textContent = '★ Collect stars!';
+  else                                     el.textContent = '●';
+}
+
+// ── Rendering ─────────────────────────────────────────────────────────────────
+function hPos(hoop, angle) {
+  const h = HOOPS[hoop];
+  return { x: h.x + Math.cos(angle) * h.r, y: h.y + Math.sin(angle) * h.r };
+}
+
+function drawHoop(h, idx) {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(180,180,220,0.18)';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(h.x, h.y, h.r, 0, Math.PI * 2); ctx.stroke();
+  if (idx < HOOPS.length - 1) {
+    const ix = (h.x + HOOPS[idx + 1].x) / 2;
+    ctx.strokeStyle = 'rgba(180,180,220,0.12)';
+    ctx.setLineDash([4, 8]); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(ix - 18, h.y - 2); ctx.lineTo(ix + 18, h.y - 2); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
+}
+
+function drawStar(s) {
+  if (s.collected) return;
+  const { x, y } = hPos(s.hoop, s.angle);
+  ctx.save();
+  ctx.translate(x, y); ctx.rotate(Date.now() * 0.002);
+  ctx.fillStyle = STAR_COL; ctx.shadowColor = STAR_COL; ctx.shadowBlur = 8;
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const r = i % 2 === 0 ? 9 : 4;
+    const a = (i / 10) * Math.PI * 2 - Math.PI / 2;
+    i === 0 ? ctx.moveTo(r * Math.cos(a), r * Math.sin(a))
+            : ctx.lineTo(r * Math.cos(a), r * Math.sin(a));
+  }
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+function drawTrain(p, idx) {
+  const { x, y } = hPos(p.hoop, p.angle);
+  const col = P_COLORS[idx], rgb = P_RGB[idx];
+
+  trails[idx].push({ x, y });
+  if (trails[idx].length > 20) trails[idx].shift();
+
+  ctx.save();
+  trails[idx].forEach((pt, i) => {
+    ctx.fillStyle = `rgba(${rgb},${(i / trails[idx].length) * 0.35})`;
+    ctx.beginPath(); ctx.arc(pt.x, pt.y, 3 * (i / trails[idx].length), 0, Math.PI * 2); ctx.fill();
+  });
+  ctx.restore();
+
+  const h = HOOPS[p.hoop];
+  const tang = Math.atan2(y - h.y, x - h.x) + Math.PI / 2 * p.dir;
+
+  ctx.save();
+  ctx.translate(x, y); ctx.rotate(tang);
+  ctx.fillStyle = col; ctx.shadowColor = col; ctx.shadowBlur = 12;
+  ctx.beginPath(); ctx.roundRect(-7, -5, 14, 10, 3); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.beginPath(); ctx.arc(5, 0, 2.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = col;
+  ctx.beginPath(); ctx.arc(-3, -5, 2, 0, Math.PI * 2); ctx.arc(3, -5, 2, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+
+  if (p.switchCooldown > 0) {
+    const frac = p.switchCooldown / SW_COOL;
+    ctx.save();
+    ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.globalAlpha = frac * 0.6;
+    ctx.beginPath(); ctx.arc(x, y, 14, -Math.PI / 2, -Math.PI / 2 + (1 - frac) * Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function drawOverlay(big, small, color) {
+  ctx.save();
+  ctx.fillStyle = 'rgba(26,26,46,0.85)'; ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = color || '#e8e8f0';
+  ctx.font = 'bold 42px system-ui';
+  ctx.fillText(big, W / 2, H / 2 - (small ? 24 : 0));
+  if (small) {
+    ctx.font = '16px system-ui'; ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.fillText(small, W / 2, H / 2 + 22);
+  }
+  ctx.restore();
+}
+
+function renderLoop() {
+  requestAnimationFrame(renderLoop);
+  ctx.fillStyle = '#1a1a2e'; ctx.fillRect(0, 0, W, H);
+  HOOPS.forEach(drawHoop);
+
+  if (!gameState) { drawOverlay('Connecting…', null, '#e8e8f0'); return; }
+
+  const { players, stars, gameActive, winner, countdown } = gameState;
+  stars.forEach(drawStar);
+  players.forEach(drawTrain);
+
+  if (countdown !== null) {
+    drawOverlay(countdown > 0 ? String(countdown) : 'GO!', 'Get ready…', '#e8e8f0');
+  } else if (winner !== null) {
+    drawOverlay(
+      `Player ${winner + 1} Wins!`,
+      `P1: ${players[0].score} pts  |  P2: ${players[1].score} pts`,
+      P_COLORS[winner]
+    );
+  }
+}
+
+// Initial canvas paint (before any socket connection)
+ctx.fillStyle = '#1a1a2e'; ctx.fillRect(0, 0, W, H);
+HOOPS.forEach(drawHoop);
+</script>
+</body>
+</html>
