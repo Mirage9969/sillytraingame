@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hoop Trains</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #12121f; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: system-ui, sans-serif; padding: 20px; }
+  #game-canvas { display: block; background: #1a1a2e; border-radius: 12px; cursor: none; max-width: 100%; }
+  #ui { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; background: rgba(255,255,255,0.06); border-radius: 12px; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; width: 680px; max-width: 100%; }
+  .player-info { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.5); }
+  .player-badge { width: 14px; height: 14px; border-radius: 50%; display: inline-block; }
+  #status-msg { font-size: 13px; color: rgba(255,255,255,0.4); text-align: center; }
+  #game-wrap { position: relative; width: 680px; max-width: 100%; }
+  #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; background: rgba(26,26,46,0.88); border-radius: 12px; }
+  #overlay h2 { color: #e8e8f0; font-size: 22px; font-weight: 500; }
+  #overlay p { color: #a0a0c0; font-size: 14px; text-align: center; max-width: 340px; line-height: 1.6; }
+  .btn { background: transparent; border: 0.5px solid rgba(180,180,220,0.4); color: #d0d0e8; border-radius: 8px; padding: 10px 24px; font-size: 14px; cursor: pointer; transition: background 0.15s; }
+  .btn:hover { background: rgba(255,255,255,0.08); }
+  #controls-hint { font-size: 11px; color: rgba(255,255,255,0.2); text-align: center; padding: 6px 0; width: 680px; max-width: 100%; }
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <div class="player-info"><span class="player-badge" style="background:#6ec6f5"></span> P1: <span id="p1-score">0</span> pts &nbsp; <span id="p1-lap">Lap 1</span></div>
+  <div id="status-msg">Press Start</div>
+  <div class="player-info"><span class="player-badge" style="background:#f5a06e"></span> P2: <span id="p2-score">0</span> pts &nbsp; <span id="p2-lap">Lap 1</span></div>
+</div>
+
+<div id="game-wrap">
+  <canvas id="game-canvas" width="680" height="420"></canvas>
+  <div id="overlay">
+    <h2>Hoop Trains</h2>
+    <p>Race around circular tracks and switch hoops to collect stars. First to <strong style="color:#e8e8f0">5 points</strong> wins!<br><br>
+    <strong style="color:#6ec6f5">P1</strong>: A to switch tracks &nbsp;|&nbsp; <strong style="color:#f5a06e">P2</strong>: L to switch tracks</p>
+    <button class="btn" id="start-btn">Start Game</button>
+  </div>
+</div>
+<div id="controls-hint">P1: [A] switch track &nbsp;•&nbsp; P2: [L] switch track</div>
+
+<script>
+const canvas = document.getElementById('game-canvas');
+const ctx = canvas.getContext('2d');
+
+const W = 680, H = 420;
+const HOOPS = [
+  { x: 170, y: 210, r: 120 },
+  { x: 340, y: 210, r: 120 },
+  { x: 510, y: 210, r: 120 },
+];
+
+const TRAIN_COLORS = ['#6ec6f5', '#f5a06e'];
+const STAR_COLOR = '#f5e56e';
+const SWITCH_COOL = 1200;
+
+let players, stars, gameActive, animId, lastTime;
+
+function initGame() {
+  players = [
+    { hoop: 0, angle: Math.PI * 0.5, speed: 0.018, dir: 1, score: 0, laps: 0, lastAngle: Math.PI * 0.5, lapCount: 0, switching: false, switchCooldown: 0, trail: [] },
+    { hoop: 2, angle: Math.PI * 1.5, speed: 0.022, dir: -1, score: 0, laps: 0, lastAngle: Math.PI * 1.5, lapCount: 0, switching: false, switchCooldown: 0, trail: [] },
+  ];
+  spawnStars();
+  gameActive = true;
+}
+
+function spawnStars() {
+  stars = [];
+  HOOPS.forEach((h, i) => {
+    for (let s = 0; s < 2; s++) {
+      let a = Math.random() * Math.PI * 2;
+      stars.push({ hoop: i, angle: a, collected: false });
+    }
+  });
+}
+
+function getPos(hoop, angle) {
+  const h = HOOPS[hoop];
+  return { x: h.x + Math.cos(angle) * h.r, y: h.y + Math.sin(angle) * h.r };
+}
+
+function trySwitch(p) {
+  if (p.switchCooldown > 0) return;
+  const hoop = HOOPS[p.hoop];
+  const px = hoop.x + Math.cos(p.angle) * hoop.r;
+  const py = hoop.y + Math.sin(p.angle) * hoop.r;
+
+  let best = null, bestDist = Infinity;
+  HOOPS.forEach((h, i) => {
+    if (i === p.hoop) return;
+    let dx = px - h.x, dy = py - h.y;
+    let dist = Math.sqrt(dx*dx + dy*dy);
+    let diff = Math.abs(dist - h.r);
+    if (diff < 28 && diff < bestDist) {
+      bestDist = diff;
+      best = i;
+    }
+  });
+
+  if (best !== null) {
+    const h = HOOPS[best];
+    const dx = px - h.x, dy = py - h.y;
+    p.angle = Math.atan2(dy, dx);
+    p.hoop = best;
+    p.switchCooldown = SWITCH_COOL;
+    playSwitch();
+  }
+}
+
+function playSwitch() {
+  try {
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    [440, 550, 660].forEach((f, i) => {
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.connect(g); g.connect(ac.destination);
+      o.type = 'triangle'; o.frequency.value = f;
+      const t = ac.currentTime + i * 0.07;
+      g.gain.setValueAtTime(0.07, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+      o.start(t); o.stop(t + 0.15);
+    });
+  } catch(e){}
+}
+
+function playScore() {
+  try {
+    const ac = new (window.AudioContext || window.webkitAudioContext)();
+    [523, 659, 784].forEach((f, i) => {
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.connect(g); g.connect(ac.destination);
+      o.type = 'sine'; o.frequency.value = f;
+      const t = ac.currentTime + i * 0.1;
+      g.gain.setValueAtTime(0.08, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+      o.start(t); o.stop(t + 0.25);
+    });
+  } catch(e){}
+}
+
+const keys = {};
+document.addEventListener('keydown', e => {
+  if (!gameActive) return;
+  if (e.key === 'a' || e.key === 'A') { if (!keys['a']) { keys['a'] = true; trySwitch(players[0]); } }
+  if (e.key === 'l' || e.key === 'L') { if (!keys['l']) { keys['l'] = true; trySwitch(players[1]); } }
+});
+document.addEventListener('keyup', e => {
+  keys[e.key.toLowerCase()] = false;
+});
+
+function drawHoop(h, idx) {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(180,180,220,0.18)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(h.x, h.y, h.r, 0, Math.PI * 2);
+  ctx.stroke();
+
+  if (idx < HOOPS.length - 1) {
+    const h2 = HOOPS[idx + 1];
+    const ix = (h.x + h2.x) / 2;
+    ctx.strokeStyle = 'rgba(180,180,220,0.12)';
+    ctx.setLineDash([4, 8]);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(ix - 18, h.y - 2);
+    ctx.lineTo(ix + 18, h.y - 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
+}
+
+function drawStar(s) {
+  if (s.collected) return;
+  const h = HOOPS[s.hoop];
+  const x = h.x + Math.cos(s.angle) * h.r;
+  const y = h.y + Math.sin(s.angle) * h.r;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(Date.now() * 0.002);
+  ctx.fillStyle = STAR_COLOR;
+  ctx.shadowColor = STAR_COLOR;
+  ctx.shadowBlur = 8;
+  const r1 = 9, r2 = 4, n = 5;
+  ctx.beginPath();
+  for (let i = 0; i < n * 2; i++) {
+    const r = i % 2 === 0 ? r1 : r2;
+    const a = (i / (n * 2)) * Math.PI * 2 - Math.PI / 2;
+    i === 0 ? ctx.moveTo(r * Math.cos(a), r * Math.sin(a)) : ctx.lineTo(r * Math.cos(a), r * Math.sin(a));
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawTrain(p, idx) {
+  const pos = getPos(p.hoop, p.angle);
+  const col = TRAIN_COLORS[idx];
+
+  p.trail.push({ x: pos.x, y: pos.y });
+  if (p.trail.length > 20) p.trail.shift();
+
+  ctx.save();
+  p.trail.forEach((pt, i) => {
+    const alpha = (i / p.trail.length) * 0.35;
+    const rgb = col === '#6ec6f5' ? '110,198,245' : '245,160,110';
+    ctx.fillStyle = `rgba(${rgb},${alpha})`;
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, 3 * (i / p.trail.length), 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.restore();
+
+  const h = HOOPS[p.hoop];
+  const dx = pos.x - h.x, dy = pos.y - h.y;
+  const tang = Math.atan2(dy, dx) + Math.PI / 2 * p.dir;
+
+  ctx.save();
+  ctx.translate(pos.x, pos.y);
+  ctx.rotate(tang);
+  ctx.fillStyle = col;
+  ctx.shadowColor = col;
+  ctx.shadowBlur = 12;
+  ctx.beginPath();
+  ctx.roundRect(-7, -5, 14, 10, 3);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.beginPath();
+  ctx.arc(5, 0, 2.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = col;
+  ctx.beginPath();
+  ctx.arc(-3, -5, 2, 0, Math.PI * 2);
+  ctx.arc(3, -5, 2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  if (p.switchCooldown > 0) {
+    const frac = p.switchCooldown / SWITCH_COOL;
+    ctx.save();
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = frac * 0.6;
+    ctx.beginPath();
+    ctx.arc(pos.x, pos.y, 14, -Math.PI / 2, -Math.PI / 2 + (1 - frac) * Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+function checkCollect(p, idx) {
+  const pos = getPos(p.hoop, p.angle);
+  stars.forEach(s => {
+    if (s.collected || s.hoop !== p.hoop) return;
+    const sp = getPos(s.hoop, s.angle);
+    const dx = pos.x - sp.x, dy = pos.y - sp.y;
+    if (Math.sqrt(dx*dx + dy*dy) < 18) {
+      s.collected = true;
+      players[idx].score++;
+      updateUI();
+      playScore();
+      setTimeout(() => {
+        const h = Math.floor(Math.random() * 3);
+        s.hoop = h;
+        s.angle = Math.random() * Math.PI * 2;
+        s.collected = false;
+      }, 1800);
+    }
+  });
+}
+
+function updateUI() {
+  document.getElementById('p1-score').textContent = players[0].score;
+  document.getElementById('p2-score').textContent = players[1].score;
+  document.getElementById('p1-lap').textContent = `Lap ${players[0].lapCount + 1}`;
+  document.getElementById('p2-lap').textContent = `Lap ${players[1].lapCount + 1}`;
+}
+
+function checkWin() {
+  for (let i = 0; i < players.length; i++) {
+    if (players[i].score >= 5) return i;
+  }
+  return -1;
+}
+
+function showWin(idx) {
+  gameActive = false;
+  const ov = document.getElementById('overlay');
+  ov.innerHTML = `
+    <h2 style="color:${TRAIN_COLORS[idx]}">Player ${idx+1} Wins!</h2>
+    <p>Final score — P1: ${players[0].score} pts &nbsp;|&nbsp; P2: ${players[1].score} pts</p>
+    <button class="btn" id="start-btn">Play Again</button>`;
+  ov.style.display = 'flex';
+  document.getElementById('start-btn').addEventListener('click', startGame);
+}
+
+function update(dt) {
+  players.forEach((p, i) => {
+    p.angle += p.speed * p.dir;
+    if (p.switchCooldown > 0) p.switchCooldown -= dt;
+
+    const crossed = p.dir > 0
+      ? (p.lastAngle % (Math.PI*2) > 5.5 && p.angle % (Math.PI*2) < 0.8)
+      : (p.lastAngle % (Math.PI*2) < 0.8 && p.angle % (Math.PI*2) > 5.5);
+    if (crossed) p.lapCount++;
+    p.lastAngle = p.angle;
+
+    checkCollect(p, i);
+  });
+  const w = checkWin();
+  if (w >= 0) showWin(w);
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(0, 0, W, H);
+  HOOPS.forEach((h, i) => drawHoop(h, i));
+  stars.forEach(s => drawStar(s));
+  if (gameActive) players.forEach((p, i) => drawTrain(p, i));
+}
+
+function loop(ts) {
+  if (!lastTime) lastTime = ts;
+  const dt = ts - lastTime;
+  lastTime = ts;
+  if (gameActive) update(dt);
+  draw();
+  animId = requestAnimationFrame(loop);
+}
+
+function startGame() {
+  document.getElementById('overlay').style.display = 'none';
+  initGame();
+  updateUI();
+  document.getElementById('status-msg').textContent = 'Collect the ★ stars!';
+  if (!animId) {
+    lastTime = null;
+    requestAnimationFrame(loop);
+  }
+}
+
+document.getElementById('start-btn').addEventListener('click', startGame);
+draw();
+</script>
+</body>
+</html>
